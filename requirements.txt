@@ -1,0 +1,7 @@
+numpy
+librosa
+torch
+torchaudio
+laion-clap
+scikit-learn
+lmdb

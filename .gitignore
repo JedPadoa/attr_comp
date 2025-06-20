@@ -1,0 +1,27 @@
+# Exclude specific folders and their contents
+/plots/
+/pkl files/
+/ffxFootstepsGenData/
+/data/
+/footsteps_full/
+
+# Exclude Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Exclude specific files
+Embedding Geometry in Audio–Language Models.pdf
+ffxFootstepsGenData.zip
+
+# Exclude system files
+.DS_Store
+Thumbs.db
+
+# Exclude any other common files that might be generated
+*.log
+*.tmp
+*.temp
