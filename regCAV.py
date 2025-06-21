@@ -12,7 +12,8 @@ import json
 import lmdb
 from typing import List, Tuple, Dict, Optional
 import librosa
-from fs_lmdb import *
+from fs_lmdb import LMDBFootstepDataset
+import matplotlib.pyplot as plt
 
 class RegCAVTrainer:
     """Regression-based CAV trainer for continuous concept learning."""
@@ -105,6 +106,51 @@ class RegCAVTrainer:
         
         return embeddings, speed_values
     
+    def load_continuous_data_from_lmdb(self, db_path: str, 
+                                     target_speeds: Optional[List[float]] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Load CLAP embeddings and continuous speed labels from LMDB database.
+        
+        Args:
+            db_path: Path to LMDB database created by fs_lmdb.py
+            target_speeds: Optional list of specific speed values to filter for.
+                          If None, loads all available speeds.
+            
+        Returns:
+            Tuple of (embeddings, speed_values) as numpy arrays
+        """
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"LMDB database not found at: {db_path}")
+        
+        embeddings = []
+        speeds = []
+        
+        with LMDBFootstepDataset(db_path, readonly=True) as dataset:
+            for i in range(len(dataset)):
+                try:
+                    embedding, label, metadata = dataset[i]
+                    speed = metadata.get('speed', label)  # Use metadata speed or fallback to label
+                    
+                    # Filter by target speeds if specified
+                    if target_speeds is not None and speed not in target_speeds:
+                        continue
+                    
+                    embeddings.append(embedding)
+                    speeds.append(speed)
+                    
+                except Exception as e:
+                    continue
+        
+        if len(embeddings) == 0:
+            raise ValueError("No data loaded from LMDB database")
+        
+        embeddings = np.array(embeddings)
+        speeds = np.array(speeds)
+        
+        print(f"✓ Loaded {len(embeddings)} samples from LMDB")
+        
+        return embeddings, speeds
+    
     def train_rcv(self, embeddings: np.ndarray, speed_values: np.ndarray, 
                   test_size: float = 0.2, random_state: int = 42) -> Dict:
         """
@@ -154,6 +200,25 @@ class RegCAVTrainer:
         test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
         train_mae = mean_absolute_error(y_train, y_train_pred)
         test_mae = mean_absolute_error(y_test, y_test_pred)
+        
+        # Plot training performance
+        plt.figure(figsize=(8, 6))
+        plt.scatter(y_train, y_train_pred, alpha=0.6, s=20)
+        
+        # Add perfect prediction line
+        min_speed = min(y_train.min(), y_train_pred.min())
+        max_speed = max(y_train.max(), y_train_pred.max())
+        plt.plot([min_speed, max_speed], [min_speed, max_speed], 'r--', 
+                 linewidth=2, label='Perfect Prediction')
+        
+        plt.xlabel('True Speed')
+        plt.ylabel('Predicted Speed')
+        plt.title(f'Training Set Performance (R² = {train_r2:.3f})')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show()
         
         results = {
             'train_r2': train_r2,
