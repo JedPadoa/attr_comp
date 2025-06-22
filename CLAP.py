@@ -54,7 +54,6 @@ class CLAP:
                 diffs.append(diff)
             
             self.attr_vector = F.normalize(torch.mean(torch.stack(diffs), dim=0), p=2, dim=0)
-        #print(f'attr_vector shape: {self.attr_vector.shape}')
 
     def get_audio_embedding(self, audio_data, sr):
         #audio_data, sr = crop_audio(audio_file)

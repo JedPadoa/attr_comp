@@ -130,8 +130,6 @@ def create_full_lmdb_dataset(audio_dir: str = ".",
         
         for attr_combo, files in sorted(attribute_groups.items()):
             speed, concrete, wood, grass = attr_combo
-            print(f"Processing combination: speed={speed:.2f}, concrete={concrete:.2f}, "
-                  f"wood={wood:.2f}, grass={grass:.2f} ({len(files)} files)")
             
             for i, audio_file in enumerate(files):
                 try:
@@ -168,8 +166,6 @@ def create_full_lmdb_dataset(audio_dir: str = ".",
                     dataset.put_sample(key, embedding, attributes, metadata)
                     
                     sample_count += 1
-                    if sample_count % 50 == 0:
-                        print(f"  Processed {sample_count}/{total_files} samples")
                         
                 except Exception as e:
                     print(f"Error processing {audio_file}: {e}")

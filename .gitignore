@@ -4,6 +4,7 @@
 /ffxFootstepsGenData/
 /data/
 /footsteps_full/
+/RCVs/
 
 # Exclude Python cache
 __pycache__/
