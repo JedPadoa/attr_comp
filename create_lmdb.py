@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 import librosa
 import torch
-from CLAP import CLAP
+from transformers import ClapModel, ClapProcessor
 from fs_lmdb import LMDBFootstepDataset
+from tqdm import tqdm
 
 def find_footstep_files(base_dir: str = ".") -> List[str]:
     """Find all audio files with attribute labels in their names."""
@@ -81,9 +82,12 @@ def group_files_by_attributes(files: List[str]) -> Dict[tuple, List[str]]:
     
     return attribute_groups
 
-def create_full_lmdb_dataset(audio_dir: str = ".", 
-                            db_path: str = "footsteps_full",
-                            clap_model: Optional[CLAP] = None) -> str:
+def create_full_lmdb_dataset(
+        audio_dir: str = ".",
+        db_path: str = "footsteps_full",
+        clap_model: Optional[ClapModel] = None,
+        clap_processor: Optional[ClapProcessor] = None,
+        ckpt: str = "laion/clap-htsat-fused") -> str:
     """
     Create LMDB dataset with CLAP embeddings for all available attribute combinations.
     
@@ -91,14 +95,22 @@ def create_full_lmdb_dataset(audio_dir: str = ".",
         audio_dir: Directory to search for audio files
         db_path: Path to LMDB database
         clap_model: Pre-initialized CLAP model
+        clap_processor: Pre-initialized CLAP processor
+        ckpt: Hugging-Face checkpoint for CLAP model
         
     Returns:
         Path to created LMDB database
     """
-    # Initialize CLAP model if not provided
+    # ----------------------------------------------------
+    # Initialise Hugging-Face CLAP model & processor
+    # ----------------------------------------------------
     if clap_model is None:
-        print("Initializing CLAP model...")
-        clap_model = CLAP()
+        print(f"Loading Hugging-Face CLAP model: {ckpt}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        clap_model = ClapModel.from_pretrained(ckpt).to(device).eval()
+        clap_processor = ClapProcessor.from_pretrained(ckpt)
+    elif clap_processor is None:
+        raise ValueError("If you supply a custom clap_model, please also pass the matching clap_processor.")
     
     # Find all footstep files
     print(f"Searching for footstep files in: {audio_dir}")
@@ -131,17 +143,20 @@ def create_full_lmdb_dataset(audio_dir: str = ".",
         for attr_combo, files in sorted(attribute_groups.items()):
             speed, concrete, wood, grass = attr_combo
             
-            for i, audio_file in enumerate(files):
+            for i, audio_file in tqdm(enumerate(files)):
                 try:
-                    # Load audio
-                    audio_data, sr = librosa.load(audio_file, sr=44100)
-                    audio_tensor = torch.tensor(audio_data, dtype=torch.float32)
-                    
-                    # Get CLAP embedding
-                    embedding = clap_model.get_audio_embedding(audio_tensor, sr)
-                    if isinstance(embedding, torch.Tensor):
-                        embedding = embedding.detach().cpu().numpy()
-                    embedding = embedding.flatten()
+                    # Load audio (CLAP expects 48 kHz mono)
+                    audio_data, sr = librosa.load(audio_file, sr=48_000)
+
+                    # Hugging-Face processor → model
+                    inputs = clap_processor(
+                        audios=audio_data,
+                        sampling_rate=sr,
+                        return_tensors="pt")
+                    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
+                    with torch.no_grad():
+                        embedding = clap_model.get_audio_features(**inputs)  # (1, 512)
+                    embedding = embedding.squeeze(0).cpu().numpy()          # (512,)
                     
                     # Create comprehensive metadata with all attributes
                     attributes = {
@@ -186,7 +201,7 @@ def main():
     
     # Configuration
     AUDIO_DIR = "ffxFootstepsGenData"  # Change this to your audio directory
-    DB_PATH = "footsteps_full"
+    DB_PATH = "footsteps_full-hfclap"
     
     # Create the dataset
     db_path = create_full_lmdb_dataset(AUDIO_DIR, DB_PATH)

@@ -1,4 +1,4 @@
-from CLAP import CLAP
+from transformers import ClapModel, ClapProcessor
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,22 +15,33 @@ import librosa
 from fs_lmdb import LMDBFootstepDataset
 import matplotlib.pyplot as plt
 
-class RegCAVTrainer:
+class RegCAV:
     """Regression-based CAV trainer for continuous concept learning on any attribute."""
     
-    def __init__(self, clap_model: Optional[CLAP] = None):
+    def __init__(self,
+                 clap_ckpt: str = "laion/clap-htsat-fused",
+                 clap_model: Optional[ClapModel] = None,
+                 clap_processor: Optional[ClapProcessor] = None,
+                 device: Optional[str] = None):
         """
         Initialize regression CAV trainer with a CLAP model.
         
         Args:
-            clap_model: Pre-initialized CLAP model. If None, creates a new one.
+            clap_ckpt:   HF checkpoint name or local path.
+            clap_model:  Pre-initialized HuggingFace ClapModel (optional).
+            clap_processor: Matching ClapProcessor (optional).
+            device:      "cuda" | "cpu" | None  (auto).
         """
-        self.clap_model = clap_model  # Allow None for now
-        self.scaler = StandardScaler()
-        self.regressor = None
-        self.rcv = None  # Regression Concept Vector
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.clap_model  = clap_model  or ClapModel.from_pretrained(clap_ckpt).to(self.device).eval()
+        self.processor   = clap_processor or ClapProcessor.from_pretrained(clap_ckpt)
+
+        self.scaler     = StandardScaler()
+        self.regressor  = None
+        self.rcv        = None  # Regression Concept Vector
         self.attribute_name = None  # Track which attribute this trainer is for
-    
+
     def load_continuous_data_from_lmdb(self, db_path: str, 
                                      attribute_name: str,
                                      target_values: Optional[List[float]] = None) -> Tuple[np.ndarray, np.ndarray]:
@@ -190,69 +201,26 @@ class RegCAVTrainer:
         return results
     
     def compute_attribute_score(self, audio_file: str) -> float:
-        """
-        Compute predicted attribute value for a single audio file using the RCV.
-        
-        Args:
-            audio_file: Path to audio file
-            
-        Returns:
-            Predicted attribute value
-        """
+        """Predict attribute value for a single audio file."""
         if self.rcv is None:
             raise ValueError("RCV not trained yet. Call train_rcv() first.")
-        if self.clap_model is None:
-            raise ValueError("CLAP model not provided. Cannot process audio files.")
+        # HuggingFace CLAP expects 48 kHz
+        wav, sr = librosa.load(audio_file, sr=48_000)
+        embedding = self._embed_wav(wav, sr)            # (512,)
         
-        # Load and embed audio
-        audio_data, sr = librosa.load(audio_file, sr=44100)
-        audio_tensor = torch.tensor(audio_data, dtype=torch.float32)
-        embedding = self.clap_model.get_audio_embedding(audio_tensor, sr)
-        
-        # Convert to numpy and flatten
-        if isinstance(embedding, torch.Tensor):
-            embedding = embedding.detach().cpu().numpy()
-        embedding = embedding.flatten()
-        
-        # Standardize using the same scaler used in training
         embedding_scaled = self.scaler.transform(embedding.reshape(1, -1))[0]
-        
-        # Predict attribute value using the full regression model
-        predicted_value = self.regressor.predict(embedding_scaled.reshape(1, -1))[0]
-        
+        predicted_value  = self.regressor.predict(embedding_scaled.reshape(1, -1))[0]
         return float(predicted_value)
     
     def compute_rcv_activation(self, audio_file: str) -> float:
-        """
-        Compute RCV activation score (dot product with RCV) for a single audio file.
-        
-        Args:
-            audio_file: Path to audio file
-            
-        Returns:
-            RCV activation score (directional alignment with attribute concept)
-        """
+        """Dot-product activation between embedding and unit-norm RCV."""
         if self.rcv is None:
             raise ValueError("RCV not trained yet. Call train_rcv() first.")
-        if self.clap_model is None:
-            raise ValueError("CLAP model not provided. Cannot process audio files.")
+        wav, sr = librosa.load(audio_file, sr=48_000)
+        embedding = self._embed_wav(wav, sr)
         
-        # Load and embed audio
-        audio_data, sr = librosa.load(audio_file, sr=44100)
-        audio_tensor = torch.tensor(audio_data, dtype=torch.float32)
-        embedding = self.clap_model.get_audio_embedding(audio_tensor, sr)
-        
-        # Convert to numpy and flatten
-        if isinstance(embedding, torch.Tensor):
-            embedding = embedding.detach().cpu().numpy()
-        embedding = embedding.flatten()
-        
-        # Standardize using the same scaler used in training
         embedding_scaled = self.scaler.transform(embedding.reshape(1, -1))[0]
-        
-        # Compute dot product with RCV (directional activation)
-        activation = np.dot(embedding_scaled, self.rcv)
-        
+        activation       = np.dot(embedding_scaled, self.rcv)
         return float(activation)
     
     def save_rcv(self, filepath: str):
@@ -285,11 +253,22 @@ class RegCAVTrainer:
         print(f"RCV for '{self.attribute_name}' loaded from {filepath}")
         print(f"RCV shape: {self.rcv.shape}")
 
+    # -----------------------------------------------------
+    # Helper: waveform ➜ 512-D CLAP embedding (numpy)
+    # -----------------------------------------------------
+    def _embed_wav(self, wav: np.ndarray, sr: int) -> np.ndarray:
+        inputs = self.processor(audios=wav,
+                                sampling_rate=sr,
+                                return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with torch.no_grad():
+            emb = self.clap_model.get_audio_features(**inputs)  # (1, 512)
+        return emb.squeeze(0).cpu().numpy()
+
 # Example usage
 if __name__ == "__main__":
     # Initialize trainer
-    clap = CLAP()
-    trainer = RegCAVTrainer(clap)
+    trainer = RegCAV()
     
     # Path to LMDB database 
     db_path = "footsteps_full"

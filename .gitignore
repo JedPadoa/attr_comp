@@ -5,6 +5,7 @@
 /data/
 /footsteps_full/
 /RCVs/
+/footsteps_full-hfclap/
 
 # Exclude Python cache
 __pycache__/
